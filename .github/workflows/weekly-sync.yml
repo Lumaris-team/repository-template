@@ -1,0 +1,181 @@
+name: Daily Team Branch Management
+
+on:
+  schedule:
+    # Runs every day at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+  read:org: read
+
+jobs:
+  manage-team-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Extract organization info
+        id: org-info
+        run: |
+          REPO="${{ github.repository }}"
+          ORG=$(echo "$REPO" | cut -d'/' -f1)
+          REPO_NAME=$(echo "$REPO" | cut -d'/' -f2)
+          echo "org=$ORG" >> $GITHUB_OUTPUT
+          echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
+          echo "Processing organization: $ORG, repository: $REPO_NAME"
+
+      - name: Get all teams with recursive child teams
+        id: teams
+        run: |
+          ORG="${{ steps.org-info.outputs.org }}"
+          REPO="${{ steps.org-info.outputs.repo_name }}"
+          
+          # Function to get all teams recursively (including child teams)
+          get_all_teams() {
+            local org=$1
+            local parent_team=$2
+            local parent_path=$3
+            
+            # Get teams - if parent_team is provided, get child teams, else get all org teams
+            if [ -z "$parent_team" ]; then
+              TEAMS=$(gh api --paginate "orgs/$org/teams" -q '.[].slug')
+            else
+              TEAMS=$(gh api --paginate "orgs/$org/teams/$parent_team/teams" -q '.[].slug')
+            fi
+          
+            for team in $TEAMS; do
+              # Determine the team path for branch naming
+              if [ -z "$parent_path" ]; then
+                TEAM_PATH="$team"
+              else
+                TEAM_PATH="$parent_path/$team"
+              fi
+              
+              echo "$TEAM_PATH" >> all_teams.txt
+              
+              # Recursively get child teams
+              get_all_teams "$org" "$team" "$TEAM_PATH"
+            done
+          }
+          
+          # Start the recursive team collection
+          get_all_teams "$ORG" "" ""
+          
+          # Remove duplicates and sort
+          sort -u all_teams.txt > unique_teams.txt
+          
+          echo "teams=$(cat unique_teams.txt | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          echo "Found teams: $(cat unique_teams.txt)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check team permissions and create branches
+        id: team-branches
+        run: |
+          ORG="${{ steps.org-info.outputs.org }}"
+          REPO="${{ steps.org-info.outputs.repo_name }}"
+          TEAMS="${{ steps.teams.outputs.teams }}"
+          
+          # Array to store teams with > read permissions
+          AUTHORIZED_TEAMS=()
+          
+          for team_path in $TEAMS; do
+            # Extract the team slug (last part of the path)
+            TEAM_SLUG=$(echo "$team_path" | awk -F'/' '{print $NF}')
+            
+            echo "Checking permissions for team: $TEAM_SLUG (path: $team_path)"
+            
+            # Check team permissions for this repository
+            PERMISSION_RESPONSE=$(gh api "orgs/$ORG/teams/$TEAM_SLUG/repos/$ORG/$REPO" 2>/dev/null || echo "NO_ACCESS")
+            
+            if [ "$PERMISSION_RESPONSE" != "NO_ACCESS" ]; then
+              # Extract permission level
+              PERMISSION=$(echo "$PERMISSION_RESPONSE" | jq -r '.permission // "pull"')
+              
+              echo "Team $TEAM_SLUG has permission: $PERMISSION"
+              
+              # Check if permission is above "read" (pull = read)
+              if [ "$PERMISSION" != "pull" ] && [ "$PERMISSION" != "read" ]; then
+                AUTHORIZED_TEAMS+=("$team_path")
+                echo "✓ Team $team_path has > read permissions"
+              else
+                echo "✗ Team $team_path has only read permissions"
+              fi
+            else
+              echo "✗ Team $TEAM_SLUG has no access to repository"
+            fi
+          done
+          
+          # Store authorized teams as space-separated string
+          AUTHORIZED_TEAMS_STR=$(IFS=' '; echo "${AUTHORIZED_TEAMS[*]}")
+          echo "authorized_teams=$AUTHORIZED_TEAMS_STR" >> $GITHUB_OUTPUT
+          echo "Teams with > read permissions: $AUTHORIZED_TEAMS_STR"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create branches for authorized teams
+        run: |
+          AUTHORIZED_TEAMS="${{ steps.team-branches.outputs.authorized_teams }}"
+          
+          for team_path in $AUTHORIZED_TEAMS; do
+            # Create branch name: develop/{team} or develop/{team}/{sub-team}
+            BRANCH_NAME="develop/$team_path"
+            
+            echo "Creating branch: $BRANCH_NAME"
+            
+            # Check if branch already exists
+            if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH_NAME"; then
+              echo "Branch $BRANCH_NAME already exists, skipping creation"
+            else
+              # Create new branch from main
+              git checkout main
+              git checkout -b "$BRANCH_NAME"
+              git push origin "$BRANCH_NAME"
+              echo "Created branch: $BRANCH_NAME"
+            fi
+          done
+
+      - name: Clean up orphaned branches
+        run: |
+          AUTHORIZED_TEAMS="${{ steps.team-branches.outputs.authorized_teams }}"
+          
+          # Get all existing develop/* branches
+          EXISTING_BRANCHES=$(git branch -r | grep 'origin/develop/' | sed 's/origin\///' | tr '\n' ' ')
+          
+          for branch in $EXISTING_BRANCHES; do
+            # Extract team path from branch name (remove "develop/" prefix)
+            TEAM_PATH=$(echo "$branch" | sed 's|^develop/||')
+            
+            # Check if this team is still authorized
+            if [[ " $AUTHORIZED_TEAMS " =~ " $TEAM_PATH " ]]; then
+              echo "Branch $branch is still needed, keeping it"
+            else
+              echo "Branch $branch is orphaned (team no longer has > read permissions)"
+              
+              # Check if branch has commits
+              COMMIT_COUNT=$(git rev-list --count "origin/$branch" ^main 2>/dev/null || echo "0")
+              
+              if [ "$COMMIT_COUNT" -eq 0 ]; then
+                echo "Branch $branch has no unique commits, deleting it"
+                git push origin --delete "$branch"
+              else
+                echo "Branch $branch has $COMMIT_COUNT unique commits, keeping it for safety"
+              fi
+            fi
+          done
+
+      - name: Summary
+        run: |
+          echo "Daily team branch management completed"
+          echo "Branches created/updated for teams with > read permissions"
+          echo "Orphaned branches without commits have been cleaned up"
