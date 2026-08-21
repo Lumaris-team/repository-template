@@ -40,6 +40,11 @@ jobs:
           ORG="${{ steps.org-info.outputs.org }}"
           REPO="${{ steps.org-info.outputs.repo_name }}"
           
+          # Function to normalize team name (lowercase, replace spaces with underscores)
+          normalize_team_name() {
+            echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '_'
+          }
+          
           # Function to get all teams recursively (including child teams)
           get_all_teams() {
             local org=$1
@@ -54,16 +59,19 @@ jobs:
             fi
           
             for team in $TEAMS; do
-              # Determine the team path for branch naming
+              # Normalize team name immediately
+              NORMALIZED_TEAM=$(normalize_team_name "$team")
+              
+              # Normalize parent path if exists
               if [ -z "$parent_path" ]; then
-                TEAM_PATH="$team"
+                TEAM_PATH="$NORMALIZED_TEAM"
               else
-                TEAM_PATH="$parent_path/$team"
+                TEAM_PATH="$parent_path/$NORMALIZED_TEAM"
               fi
               
               echo "$TEAM_PATH" >> all_teams.txt
               
-              # Recursively get child teams
+              # Recursively get child teams (use normalized name for API call)
               get_all_teams "$org" "$team" "$TEAM_PATH"
             done
           }
