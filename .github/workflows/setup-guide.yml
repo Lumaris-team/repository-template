@@ -1,0 +1,214 @@
+name: Setup Guide
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip:
+        description: 'Skip issue creation (for testing)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create-setup-issue:
+    runs-on: ubuntu-latest
+    if: inputs.skip != 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Gather configuration info
+        id: config
+        run: |
+          echo "repository=$(echo '${{ github.repository }}')" >> $GITHUB_OUTPUT
+          echo "owner=$(echo '${{ github.repository_owner }}')" >> $GITHUB_OUTPUT
+          
+          # Check if wrangler.toml exists
+          if [ -f "wrangler.toml" ]; then
+            echo "has_wrangler=true" >> $GITHUB_OUTPUT
+            WORKER_NAME=$(grep '^name = ' wrangler.toml | sed 's/name = //; s/"//g')
+            echo "worker_name=$WORKER_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "has_wrangler=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check CI workflow
+          if [ -f ".github/workflows/ci.yml" ]; then
+            echo "has_ci=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_ci=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check frontend structure
+          if [ -d "src/frontend" ]; then
+            echo "has_frontend=true" >> $GITHUB_OUTPUT
+            FRONTEND_DIRS=$(ls -1 src/frontend/ | tr '\n' ', ')
+            echo "frontend_dirs=$FRONTEND_DIRS" >> $GITHUB_OUTPUT
+          else
+            echo "has_frontend=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check backend structure
+          if [ -d "src/backend" ]; then
+            echo "has_backend=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_backend=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create setup issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo.repo;
+            const owner = context.repo.owner;
+            const hasWrangler = '${{ steps.config.outputs.has_wrangler }}' === 'true';
+            const hasCI = '${{ steps.config.outputs.has_ci }}' === 'true';
+            const hasFrontend = '${{ steps.config.outputs.has_frontend }}' === 'true';
+            const hasBackend = '${{ steps.config.outputs.has_backend }}' === 'true';
+            const workerName = '${{ steps.config.outputs.worker_name }}';
+            const frontendDirs = '${{ steps.config.outputs.frontend_dirs }}';
+            
+            let body = `# 🚀 Repository Setup Guide
+            
+This repository has been initialized from the template. Here's what has been configured:
+            
+## 📁 Repository Structure
+            
+`;
+            
+            if (hasFrontend) {
+              body += `### Frontend Structure
+              - \`src/frontend/\` - Frontend application with the following directories:
+                ${frontendDirs.split(',').map(dir => `- \`${dir.trim()}/\``).join('\n                ')}
+                
+`;
+            }
+            
+            if (hasBackend) {
+              body += `### Backend Structure
+              - \`src/backend/\` - Backend feature modules
+              - Each folder corresponds to a specific feature
+              - Functions are imported in the main \`index.js\`
+                
+`;
+            }
+            
+            if (hasWrangler) {
+              body += `## ⚙️ Cloudflare Workers Configuration
+              
+### Wrangler.toml Configuration
+              - **Worker Name**: \`${workerName}\`
+              - **Main Entry**: \`src/index.js\`
+              - **Assets**: \`./src/frontend\` bound to \`ASSETS\`
+              - **Observability**: Enabled with full logging and tracing
+              - **Compatibility**: Node.js compatibility enabled
+              
+### Required Setup
+              1. Install dependencies: \`npm install\`
+              2. Configure Cloudflare Workers credentials
+              3. Update \`wrangler.toml\` with your specific worker name
+              4. Deploy: \`npx wrangler deploy\`
+                
+`;
+            }
+            
+            if (hasCI) {
+              body += `## 🔄 CI/CD Configuration
+              
+### GitHub Actions Workflow
+              - **File**: \`.github/workflows/ci.yml\`
+              - **Triggers**: Pull requests and pushes to \`main\`
+              - **Jobs**:
+                - **Test**: Runs automated tests
+                - **Lint**: Code quality checks
+                - **Security**: Security scanning
+              
+### Required Setup
+              1. Add your test commands in the "Run tests" step
+              2. Add your linting commands in the "Lint" step
+              3. Configure security scanning tools
+              4. Enable branch protection on \`main\`
+                
+`;
+            }
+            
+            body += `## 🏗️ Architecture
+            
+This repository uses **Trunk-Based Development**, the standard architecture used by large organizations (Google, Meta, Netflix, etc.).
+            
+### Branch Structure
+              - \`main\` - Only permanent branch (production)
+              - \`feature/*\` - Temporary feature branches (1-3 days max)
+              - \`bugfix/*\` - Temporary bug fix branches (1-2 days)
+              - \`hotfix/*\` - Urgent production fixes (hours)
+              
+### Development Workflow
+              1. Create feature branch from \`main\`
+              2. Work and commit on the branch
+              3. Create Pull Request to \`main\`
+              4. CI/CD runs automatically (tests + linting)
+              5. Code review by team
+              6. Merge to \`main\` after approval
+              7. Automatic deployment
+              
+### Documentation
+              See \`ARCHITECTURE.md\` for complete details on:
+              - When and how to create branches
+              - Git commands and naming conventions
+              - Complete workflow examples
+              - Best practices and troubleshooting
+              
+## ✅ Next Steps for Admins
+              
+### 1. Configure GitHub Repository Settings
+              - Enable branch protection on \`main\`
+              - Require pull request reviews (1+)
+              - Require status checks to pass
+              - Restrict who can push to \`main\`
+              
+### 2. Configure Team Permissions
+              - Set up GitHub Teams for your organization
+              - Grant appropriate permissions to teams
+              - Configure repository access for each team
+              
+### 3. Customize CI/CD Pipeline
+              - Add your specific test commands
+              - Configure linting rules
+              - Set up security scanning tools
+              - Add deployment steps if needed
+              
+### 4. Update Documentation
+              - Update \`README.md\` with project-specific information
+              - Customize \`ARCHITECTURE.md\` if needed
+              - Add team-specific guidelines
+              
+### 5. Configure Cloudflare Workers (if applicable)
+              - Set up Cloudflare account
+              - Configure wrangler authentication
+              - Update environment variables
+              - Set up KV/R2/D1 bindings if needed
+              
+## 📚 Additional Resources
+              
+- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
+              - [GitHub Actions Documentation](https://docs.github.com/en/actions)
+              - [Trunk-Based Development Guide](https://trunkbaseddevelopment.com/)
+              - [GitHub Flow Guide](https://guides.github.com/introduction/flow/)
+              
+---
+              
+*This issue was automatically generated when the repository was initialized from the template.*`;
+            
+            github.rest.issues.create({
+              owner: owner,
+              repo: repo,
+              title: '🚀 Repository Setup Guide',
+              body: body,
+              labels: ['setup', 'template', 'configuration']
+            });
+            
+            console.log('Setup guide issue created successfully');
