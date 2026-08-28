@@ -1,0 +1,325 @@
+name: Repository Initialization
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip:
+        description: 'Skip issue creation (for testing)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  initialization:
+    runs-on: ubuntu-latest
+    if: inputs.skip != 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect repository structure
+        id: detect
+        run: |
+          echo "detecting structure..."
+          
+          # Detect Cloudflare Workers
+          if [ -f "wrangler.toml" ]; then
+            echo "has_workers=true" >> $GITHUB_OUTPUT
+            WORKER_NAME=$(grep '^name = ' wrangler.toml | head -1 | sed 's/name = //; s/"//g')
+            echo "worker_name=$WORKER_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "has_workers=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Detect CI workflow
+          if [ -f ".github/workflows/ci.yml" ]; then
+            echo "has_ci=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_ci=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Detect frontend
+          if [ -d "src/frontend" ]; then
+            echo "has_frontend=true" >> $GITHUB_OUTPUT
+            FRONTEND_DIRS=$(find src/frontend -maxdepth 1 -type d -not -path "src/frontend" | xargs -I {} basename {} | tr '\n' ',' | sed 's/,$//')
+            echo "frontend_dirs=$FRONTEND_DIRS" >> $GITHUB_OUTPUT
+          else
+            echo "has_frontend=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Detect backend
+          if [ -d "src/backend" ]; then
+            echo "has_backend=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_backend=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "detection completed"
+
+      - name: Copy repository settings from template
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Copying ALL repository settings from template..."
+          
+          TEMPLATE_REPO="${{ github.repository_owner }}/repository-template"
+          CURRENT_REPO="${{ github.repository }}"
+          
+          # 1. Copy topics
+          echo "1. Copying topics..."
+          TOPICS=$(gh repo view $TEMPLATE_REPO --json topics --jq '.topics[]' | tr '\n' ',' | sed 's/,$//')
+          if [ -n "$TOPICS" ]; then
+            echo "Setting topics: $TOPICS"
+            gh api repos/$CURRENT_REPO/topics -X PUT -f "names[]=$TOPICS" || echo "Failed to set topics"
+          fi
+          
+          # 2. Copy basic repository settings
+          echo "2. Copying basic repository settings..."
+          TEMPLATE_SETTINGS=$(gh api repos/$TEMPLATE_REPO --json license_key,has_wiki,has_pages,has_projects,has_downloads,has_issues,allow_auto_merge,allow_forking,delete_branch_on_merge,web_commit_signoff_required,merge_commit_message,merge_commit_title,squash_merge_commit_message,squash_merge_commit_title,allow_rebase_merge,allow_squash_merge,allow_merge_commit,use_squash_pr_title_as_default,archived,visibility,allow_update_branch,default_branch,private,security_and_analysis)
+          
+          if [ -n "$TEMPLATE_SETTINGS" ]; then
+            echo "Applying repository settings..."
+            gh api repos/$CURRENT_REPO -X PATCH -f license_key="$(echo $TEMPLATE_SETTINGS | jq -r '.license_key // empty')" \
+              -f has_wiki="$(echo $TEMPLATE_SETTINGS | jq -r '.has_wiki // false')" \
+              -f has_pages="$(echo $TEMPLATE_SETTINGS | jq -r '.has_pages // false')" \
+              -f has_projects="$(echo $TEMPLATE_SETTINGS | jq -r '.has_projects // false')" \
+              -f has_downloads="$(echo $TEMPLATE_SETTINGS | jq -r '.has_downloads // false')" \
+              -f has_issues="$(echo $TEMPLATE_SETTINGS | jq -r '.has_issues // true')" \
+              -f allow_auto_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.allow_auto_merge // false')" \
+              -f allow_forking="$(echo $TEMPLATE_SETTINGS | jq -r '.allow_forking // false')" \
+              -f delete_branch_on_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.delete_branch_on_merge // false')" \
+              -f web_commit_signoff_required="$(echo $TEMPLATE_SETTINGS | jq -r '.web_commit_signoff_required // false')" \
+              -f merge_commit_message="$(echo $TEMPLATE_SETTINGS | jq -r '.merge_commit_message // empty')" \
+              -f merge_commit_title="$(echo $TEMPLATE_SETTINGS | jq -r '.merge_commit_title // empty')" \
+              -f squash_merge_commit_message="$(echo $TEMPLATE_SETTINGS | jq -r '.squash_merge_commit_message // empty')" \
+              -f squash_merge_commit_title="$(echo $TEMPLATE_SETTINGS | jq -r '.squash_merge_commit_title // empty')" \
+              -f allow_rebase_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.allow_rebase_merge // true')" \
+              -f allow_squash_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.allow_squash_merge // true')" \
+              -f allow_merge_commit="$(echo $TEMPLATE_SETTINGS | jq -r '.allow_merge_commit // true')" \
+              -f use_squash_pr_title_as_default="$(echo $TEMPLATE_SETTINGS | jq -r '.use_squash_pr_title_as_default // false')" \
+              -f allow_update_branch="$(echo $TEMPLATE_SETTINGS | jq -r '.allow_update_branch // false')" || echo "Failed to apply some settings"
+          fi
+          
+          # 3. Copy security settings
+          echo "3. Copying security settings..."
+          SECURITY_SETTINGS=$(gh api repos/$TEMPLATE_REPO --json security_and_analysis)
+          if [ -n "$SECURITY_SETTINGS" ]; then
+            ADVANCED_SECURITY=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.advanced_security.status // empty')
+            SECRET_SCANNING=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.secret_scanning.status // empty')
+            SECRET_SCANNING_PUSH_PROTECTION=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.secret_scanning_push_protection.status // empty')
+            DEPENDABOT_SECURITY_UPDATES=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.dependabot_security_updates.status // empty')
+            DEPENDABOT_ALERTS=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.dependabot_alerts.status // empty')
+            CODEQL_DEFAULT_SETUP=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.codeql_default_setup.status // empty')
+            
+            if [ -n "$ADVANCED_SECURITY" ]; then
+              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"advanced_security":{"status":"'$ADVANCED_SECURITY'"}}' || echo "Failed to set advanced_security"
+            fi
+            if [ -n "$SECRET_SCANNING" ]; then
+              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"secret_scanning":{"status":"'$SECRET_SCANNING'"}}' || echo "Failed to set secret_scanning"
+            fi
+            if [ -n "$SECRET_SCANNING_PUSH_PROTECTION" ]; then
+              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"secret_scanning_push_protection":{"status":"'$SECRET_SCANNING_PUSH_PROTECTION'"}}' || echo "Failed to set secret_scanning_push_protection"
+            fi
+            if [ -n "$DEPENDABOT_SECURITY_UPDATES" ]; then
+              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"dependabot_security_updates":{"status":"'$DEPENDABOT_SECURITY_UPDATES'"}}' || echo "Failed to set dependabot_security_updates"
+            fi
+            if [ -n "$DEPENDABOT_ALERTS" ]; then
+              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"dependabot_alerts":{"status":"'$DEPENDABOT_ALERTS'"}}' || echo "Failed to set dependabot_alerts"
+            fi
+            if [ -n "$CODEQL_DEFAULT_SETUP" ]; then
+              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"codeql_default_setup":{"status":"'$CODEQL_DEFAULT_SETUP'"}}' || echo "Failed to set codeql_default_setup"
+            fi
+          fi
+          
+          # 4. Copy rulesets
+          echo "4. Copying rulesets..."
+          RULESETS=$(gh api repos/$TEMPLATE_REPO/rulesets --json name,target,enforcement,bypass_mode,restricts_pushes_creates,requires_pull_request,required_approving_review_count,dismiss_stale_reviews,require_code_owner_review,require_last_push_approval,required_status_checks,enforce_admins --jq '.[]')
+          if [ -n "$RULESETS" ]; then
+            echo "$RULESETS" | jq -c '.' | while read -r ruleset; do
+              echo "Creating ruleset: $(echo $ruleset | jq -r '.name')"
+              gh api repos/$CURRENT_REPO/rulesets -X POST --input - <<< "$ruleset" || echo "Failed to create ruleset"
+            done
+          fi
+          
+          # 5. Copy labels
+          echo "5. Copying labels..."
+          LABELS=$(gh api repos/$TEMPLATE_REPO/labels --json name,color,description --jq '.[]')
+          if [ -n "$LABELS" ]; then
+            echo "$LABELS" | jq -c '.' | while read -r label; do
+              NAME=$(echo $label | jq -r '.name')
+              echo "Creating label: $NAME"
+              gh api repos/$CURRENT_REPO/labels -X POST --input - <<< "$label" || echo "Failed to create label $NAME"
+            done
+          fi
+          
+          # 6. Copy autolinks
+          echo "6. Copying autolinks..."
+          AUTOLINKS=$(gh api repos/$TEMPLATE_REPO/autolinks --json key_prefix,url_prefix,is_always_active --jq '.[]')
+          if [ -n "$AUTOLINKS" ]; then
+            echo "$AUTOLINKS" | jq -c '.' | while read -r autolink; do
+              echo "Creating autolink"
+              gh api repos/$CURRENT_REPO/autolinks -X POST --input - <<< "$autolink" || echo "Failed to create autolink"
+            done
+          fi
+          
+          # 7. Copy deployment environments
+          echo "7. Copying deployment environments..."
+          ENVIRONMENTS=$(gh api repos/$TEMPLATE_REPO/environments --json name --jq '.[].name')
+          if [ -n "$ENVIRONMENTS" ]; then
+            for env in $ENVIRONMENTS; do
+              echo "Creating environment: $env"
+              gh api repos/$CURRENT_REPO/environments/$env -X PUT || echo "Failed to create environment $env"
+            done
+          fi
+          
+          echo "Repository settings copied successfully"
+
+      - name: Create initialization issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo.repo;
+            const owner = context.repo.owner;
+            const fullName = owner + '/' + repo;
+            
+            const hasWorkers = '${{ steps.detect.outputs.has_workers }}' === 'true';
+            const hasCI = '${{ steps.detect.outputs.has_ci }}' === 'true';
+            const hasFrontend = '${{ steps.detect.outputs.has_frontend }}' === 'true';
+            const hasBackend = '${{ steps.detect.outputs.has_backend }}' === 'true';
+            const workerName = '${{ steps.detect.outputs.worker_name }}';
+            const frontendDirs = '${{ steps.detect.outputs.frontend_dirs }}';
+            
+            let body = '# Repository Initialization Complete\n\n';
+            body += 'Repository: ' + fullName + '\n\n';
+            body += 'This repository has been successfully initialized from the template. Repository settings have been automatically copied from the template.\n\n';
+            body += '## Repository Structure\n\n';
+            
+            if (hasFrontend) {
+              body += '### Frontend Architecture\n';
+              body += '- src/frontend/ - Frontend application structure\n';
+              body += 'Available directories: ' + frontendDirs + '\n\n';
+            }
+            
+            if (hasBackend) {
+              body += '### Backend Architecture\n';
+              body += '- src/backend/ - Backend feature modules\n';
+              body += 'Feature-based organization\n\n';
+            }
+            
+            if (hasWorkers) {
+              body += '## Cloudflare Workers Configuration\n\n';
+              body += 'Worker Name: ' + workerName + '\n';
+              body += 'Entry Point: src/index.js\n';
+              body += 'Assets: ./src/frontend\n\n';
+            }
+            
+            if (hasCI) {
+              body += '## CI/CD Pipeline\n\n';
+              body += 'Workflow: .github/workflows/ci.yml\n';
+              body += 'Triggers: Pull requests and pushes to main\n\n';
+            }
+            
+            body += '## Development Architecture\n\n';
+            body += 'This repository uses Trunk-Based Development. See ARCHITECTURE.md for complete details.\n\n';
+            
+            body += '## Manual Configuration Required\n\n';
+            body += '### Critical (Must Configure)\n\n';
+            body += '#### Repository Metadata\n';
+            body += '- [ ] Update repository description in Settings → General\n';
+            body += '- [ ] Add repository topics (keywords) in Settings → General\n';
+            body += '- [ ] Set repository visibility (public/private) in Settings → General\n';
+            body += '- [ ] Update README.md with project-specific information\n';
+            body += '- [ ] Add LICENSE file if required\n';
+            body += '- [ ] Update CODEOWNERS file with team members\n\n';
+            
+            body += '#### Team and Access Management\n';
+            body += '- [ ] Add collaborators/teams to repository in Settings → Collaborators\n';
+            body += '- [ ] Configure team permissions (read/write/admin)\n';
+            body += '- [ ] Set up CODEOWNERS for code review assignments\n\n';
+            
+            body += '#### Branch Protection (Settings → Rules → Rulesets)\n';
+            body += '- [ ] Create ruleset for main branch\n';
+            body += '- [ ] Require pull request before merging\n';
+            body += '- [ ] Require at least 1 approving review\n';
+            body += '- [ ] Require status checks to pass before merge\n';
+            body += '- [ ] Require branches to be up to date before merging\n';
+            body += '- [ ] Restrict direct pushes to main\n';
+            body += '- [ ] Configure required reviewers if needed\n\n';
+            
+            body += '#### Cloudflare Workers (if applicable)\n';
+            body += '- [ ] Update worker name in wrangler.toml\n';
+            body += '- [ ] Authenticate with Cloudflare: npx wrangler login\n';
+            body += '- [ ] Configure environment variables if needed\n';
+            body += '- [ ] Set up KV namespace if needed\n';
+            body += '- [ ] Configure R2 bucket if needed\n';
+            body += '- [ ] Set up D1 database if needed\n';
+            body += '- [ ] Configure custom domains\n';
+            body += '- [ ] Deploy to Cloudflare: npx wrangler deploy\n\n';
+            
+            body += '### Important (Should Configure)\n\n';
+            body += '#### CI/CD Customization\n';
+            body += '- [ ] Add project-specific test commands in .github/workflows/ci.yml\n';
+            body += '- [ ] Configure linting rules and standards\n';
+            body += '- [ ] Set up security scanning tools\n';
+            body += '- [ ] Add deployment stages (staging, production)\n';
+            body += '- [ ] Configure notification settings\n\n';
+            
+            body += '#### Documentation\n';
+            body += '- [ ] Update CONTRIBUTING.md with contribution guidelines\n';
+            body += '- [ ] Add SECURITY.md with security policy\n';
+            body += '- [ ] Create issue templates in .github/ISSUE_TEMPLATE/\n';
+            body += '- [ ] Create PR template in .github/PULL_REQUEST_TEMPLATE.md\n';
+            body += '- [ ] Add CODE_OF_CONDUCT.md if needed\n\n';
+            
+            body += '#### Webhooks and Integrations\n';
+            body += '- [ ] Configure webhooks for external services\n';
+            body += '- [ ] Set up Slack/Discord notifications\n';
+            body += '- [ ] Configure project management integrations (Jira, Linear, etc.)\n';
+            body += '- [ ] Set up CI/CD notifications\n\n';
+            
+            body += '### Optional (Nice to Have)\n\n';
+            body += '#### Additional Features\n';
+            body += '- [ ] Enable GitHub Pages if documentation site needed\n';
+            body += '- [ ] Enable GitHub Discussions for community\n';
+            body += '- [ ] Configure GitHub Projects for task tracking\n';
+            body += '- [ ] Set up dependency review automation\n';
+            body += '- [ ] Configure merge queue for concurrent PRs\n';
+            body += '- [ ] Enable auto-merge for specific workflows\n\n';
+            
+            body += '#### Platform Links\n';
+            body += '- [ ] Add link to production platform in README\n';
+            body += '- [ ] Add monitoring/dashboard links\n';
+            body += '- [ ] Add documentation site link\n';
+            body += '- [ ] Add API documentation link\n\n';
+            
+            body += '## What Was Automatically Configured\n\n';
+            body += 'The following settings were automatically copied from the template:\n\n';
+            body += '- Repository topics (keywords)\n';
+            body += '- Basic repository settings (wiki, pages, projects, etc.)\n';
+            body += '- Merge options (rebase, squash, merge commit)\n';
+            body += '- Security settings (advanced security, secret scanning, etc.)\n';
+            body += '- Dependabot configuration\n';
+            body += '- Repository rulesets\n';
+            body += '- Labels\n';
+            body += '- Autolinks\n';
+            body += '- Deployment environments\n\n';
+            
+            body += '## Resources\n\n';
+            body += '- [Cloudflare Workers Docs](https://developers.cloudflare.com/workers/)\n';
+            body += '- [GitHub Actions Documentation](https://docs.github.com/en/actions)\n';
+            body += '- [GitHub Branch Protection](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-branch-protection-rules)\n';
+            body += '- [Trunk-Based Development](https://trunkbaseddevelopment.com/)\n\n';
+            
+            body += 'Generated: ' + new Date().toISOString();
+            
+            github.rest.issues.create({
+              owner: owner,
+              repo: repo,
+              title: 'Repository Initialization Complete',
+              body: body,
+              labels: ['setup', 'admin']
+            });
