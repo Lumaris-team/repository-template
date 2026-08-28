@@ -35,6 +35,24 @@ jobs:
             fi
           done
 
+      - name: Auto-merge Dependabot PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Auto-merging Dependabot PRs..."
+          
+          # Get all open Dependabot PRs
+          PRS=$(gh pr list --author "app/dependabot" --state open --json number --jq '.[].number' || echo "")
+          
+          if [ -n "$PRS" ]; then
+            for pr in $PRS; do
+              echo "Auto-merging Dependabot PR #$pr"
+              gh pr merge $pr --auto --merge || echo "Failed to auto-merge PR #$pr"
+            done
+          else
+            echo "No open Dependabot PRs found"
+          fi
+
       - name: Check main vs develop
         id: check-main-develop
         run: |
@@ -74,8 +92,13 @@ jobs:
           
           if [ -n "$EXISTING_PR" ]; then
             echo "PR already exists: #$EXISTING_PR"
+            gh pr merge $EXISTING_PR --auto --merge || echo "Failed to auto-merge PR"
           else
-            gh pr create --base develop --head main --title "$TITLE" --body "$BODY" || echo "Failed to create PR (may already exist)"
+            PR_NUMBER=$(gh pr create --base develop --head main --title "$TITLE" --body "$BODY" --json number --jq '.number' || echo "")
+            if [ -n "$PR_NUMBER" ]; then
+              echo "Created PR #$PR_NUMBER, auto-merging..."
+              gh pr merge $PR_NUMBER --auto --merge || echo "Failed to auto-merge PR"
+            fi
           fi
 
       - name: Get all branches except main and dependabot
@@ -114,9 +137,14 @@ jobs:
                   EXISTING_PR=$(gh pr list --base $branch --head develop --state open --json number --jq '.[0].number' || echo "")
                   
                   if [ -n "$EXISTING_PR" ]; then
-                    echo "PR already exists: #$EXISTING_PR"
+                    echo "PR already exists: #$EXISTING_PR, auto-merging..."
+                    gh pr merge $EXISTING_PR --auto --merge || echo "Failed to auto-merge PR"
                   else
-                    gh pr create --base $branch --head develop --title "$TITLE" --body "$BODY" || echo "Failed to create PR for $branch"
+                    PR_NUMBER=$(gh pr create --base $branch --head develop --title "$TITLE" --body "$BODY" --json number --jq '.number' || echo "")
+                    if [ -n "$PR_NUMBER" ]; then
+                      echo "Created PR #$PR_NUMBER, auto-merging..."
+                      gh pr merge $PR_NUMBER --auto --merge || echo "Failed to auto-merge PR"
+                    fi
                   fi
                 else
                   echo "No new commits in develop for $branch"
