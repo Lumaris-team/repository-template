@@ -115,24 +115,36 @@ jobs:
             DEPENDABOT_ALERTS=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.dependabot_alerts.status // empty')
             CODEQL_DEFAULT_SETUP=$(echo $SECURITY_SETTINGS | jq -r '.security_and_analysis.codeql_default_setup.status // empty')
             
+            echo "Advanced Security: $ADVANCED_SECURITY"
+            echo "Secret Scanning: $SECRET_SCANNING"
+            echo "Secret Scanning Push Protection: $SECRET_SCANNING_PUSH_PROTECTION"
+            echo "Dependabot Security Updates: $DEPENDABOT_SECURITY_UPDATES"
+            echo "Dependabot Alerts: $DEPENDABOT_ALERTS"
+            echo "CodeQL Default Setup: $CODEQL_DEFAULT_SETUP"
+            
+            # Build combined security_and_analysis object
+            SECURITY_PAYLOAD='{}'
             if [ -n "$ADVANCED_SECURITY" ]; then
-              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"advanced_security":{"status":"'$ADVANCED_SECURITY'"}}' || echo "Failed to set advanced_security"
+              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$ADVANCED_SECURITY" '.advanced_security.status = $status')
             fi
             if [ -n "$SECRET_SCANNING" ]; then
-              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"secret_scanning":{"status":"'$SECRET_SCANNING'"}}' || echo "Failed to set secret_scanning"
+              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$SECRET_SCANNING" '.secret_scanning.status = $status')
             fi
             if [ -n "$SECRET_SCANNING_PUSH_PROTECTION" ]; then
-              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"secret_scanning_push_protection":{"status":"'$SECRET_SCANNING_PUSH_PROTECTION'"}}' || echo "Failed to set secret_scanning_push_protection"
+              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$SECRET_SCANNING_PUSH_PROTECTION" '.secret_scanning_push_protection.status = $status')
             fi
             if [ -n "$DEPENDABOT_SECURITY_UPDATES" ]; then
-              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"dependabot_security_updates":{"status":"'$DEPENDABOT_SECURITY_UPDATES'"}}' || echo "Failed to set dependabot_security_updates"
+              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$DEPENDABOT_SECURITY_UPDATES" '.dependabot_security_updates.status = $status')
             fi
             if [ -n "$DEPENDABOT_ALERTS" ]; then
-              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"dependabot_alerts":{"status":"'$DEPENDABOT_ALERTS'"}}' || echo "Failed to set dependabot_alerts"
+              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$DEPENDABOT_ALERTS" '.dependabot_alerts.status = $status')
             fi
             if [ -n "$CODEQL_DEFAULT_SETUP" ]; then
-              gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis='{"codeql_default_setup":{"status":"'$CODEQL_DEFAULT_SETUP'"}}' || echo "Failed to set codeql_default_setup"
+              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$CODEQL_DEFAULT_SETUP" '.codeql_default_setup.status = $status')
             fi
+            
+            echo "Applying security settings: $SECURITY_PAYLOAD"
+            gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis="$SECURITY_PAYLOAD" || echo "Failed to apply security settings"
           fi
           
           # 4. Copy rulesets
