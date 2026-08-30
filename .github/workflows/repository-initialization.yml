@@ -64,119 +64,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Copying ALL repository settings from template..."
+          echo "Copying repository settings from template..."
           
           TEMPLATE_REPO="${{ github.repository_owner }}/repository-template"
           CURRENT_REPO="${{ github.repository }}"
           
-          # 1. Copy topics
-          echo "1. Copying topics..."
-          TOPICS=$(gh repo view $TEMPLATE_REPO --json repositoryTopics --jq '.repositoryTopics.nodes[].topic.name' | tr '\n' ',' | sed 's/,$//')
+          # Copy topics only (simple and reliable)
+          echo "Copying topics..."
+          TOPICS=$(gh repo view $TEMPLATE_REPO --json repositoryTopics --jq '.repositoryTopics.nodes[].topic.name' | tr '\n' ' ')
           if [ -n "$TOPICS" ]; then
             echo "Setting topics: $TOPICS"
-            # Convert comma-separated to array format for API
-            echo "$TOPICS" | jq -R 'split(",")' > topics.json
-            gh api repos/$CURRENT_REPO/topics -X PUT --input topics.json || echo "Failed to set topics"
-            rm topics.json
-          fi
-          
-          # 2. Copy basic repository settings
-          echo "2. Copying basic repository settings..."
-          TEMPLATE_SETTINGS=$(gh repo view $TEMPLATE_REPO --json hasWikiEnabled,hasProjectsEnabled,deleteBranchOnMerge,mergeCommitAllowed,rebaseMergeAllowed,squashMergeAllowed,hasIssuesEnabled,visibility)
-          
-          if [ -n "$TEMPLATE_SETTINGS" ]; then
-            echo "Applying repository settings..."
-            gh api repos/$CURRENT_REPO -X PATCH -f has_wiki="$(echo $TEMPLATE_SETTINGS | jq -r '.hasWikiEnabled // false')" \
-              -f has_projects="$(echo $TEMPLATE_SETTINGS | jq -r '.hasProjectsEnabled // false')" \
-              -f delete_branch_on_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.deleteBranchOnMerge // false')" \
-              -f has_issues="$(echo $TEMPLATE_SETTINGS | jq -r '.hasIssuesEnabled // true')" \
-              -f allow_rebase_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.rebaseMergeAllowed // true')" \
-              -f allow_squash_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.squashMergeAllowed // true')" \
-              -f allow_merge_commit="$(echo $TEMPLATE_SETTINGS | jq -r '.mergeCommitAllowed // true')" || echo "Failed to apply some settings"
-          fi
-          
-          # 3. Copy security settings
-          echo "3. Copying security settings..."
-          SECURITY_SETTINGS=$(gh repo view $TEMPLATE_REPO --json securityAndAnalysis)
-          if [ -n "$SECURITY_SETTINGS" ]; then
-            ADVANCED_SECURITY=$(echo $SECURITY_SETTINGS | jq -r '.securityAndAnalysis.advancedSecurity.status // empty')
-            SECRET_SCANNING=$(echo $SECURITY_SETTINGS | jq -r '.securityAndAnalysis.secretScanning.status // empty')
-            SECRET_SCANNING_PUSH_PROTECTION=$(echo $SECURITY_SETTINGS | jq -r '.securityAndAnalysis.secretScanningPushProtection.status // empty')
-            DEPENDABOT_SECURITY_UPDATES=$(echo $SECURITY_SETTINGS | jq -r '.securityAndAnalysis.dependabotSecurityUpdates.status // empty')
-            DEPENDABOT_ALERTS=$(echo $SECURITY_SETTINGS | jq -r '.securityAndAnalysis.dependabotAlerts.status // empty')
-            CODEQL_DEFAULT_SETUP=$(echo $SECURITY_SETTINGS | jq -r '.securityAndAnalysis.codeqlDefaultSetup.status // empty')
-            
-            echo "Advanced Security: $ADVANCED_SECURITY"
-            echo "Secret Scanning: $SECRET_SCANNING"
-            echo "Secret Scanning Push Protection: $SECRET_SCANNING_PUSH_PROTECTION"
-            echo "Dependabot Security Updates: $DEPENDABOT_SECURITY_UPDATES"
-            echo "Dependabot Alerts: $DEPENDABOT_ALERTS"
-            echo "CodeQL Default Setup: $CODEQL_DEFAULT_SETUP"
-            
-            # Build combined security_and_analysis object
-            SECURITY_PAYLOAD='{}'
-            if [ -n "$ADVANCED_SECURITY" ]; then
-              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$ADVANCED_SECURITY" '.advanced_security.status = $status')
-            fi
-            if [ -n "$SECRET_SCANNING" ]; then
-              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$SECRET_SCANNING" '.secret_scanning.status = $status')
-            fi
-            if [ -n "$SECRET_SCANNING_PUSH_PROTECTION" ]; then
-              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$SECRET_SCANNING_PUSH_PROTECTION" '.secret_scanning_push_protection.status = $status')
-            fi
-            if [ -n "$DEPENDABOT_SECURITY_UPDATES" ]; then
-              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$DEPENDABOT_SECURITY_UPDATES" '.dependabot_security_updates.status = $status')
-            fi
-            if [ -n "$DEPENDABOT_ALERTS" ]; then
-              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$DEPENDABOT_ALERTS" '.dependabot_alerts.status = $status')
-            fi
-            if [ -n "$CODEQL_DEFAULT_SETUP" ]; then
-              SECURITY_PAYLOAD=$(echo $SECURITY_PAYLOAD | jq --arg status "$CODEQL_DEFAULT_SETUP" '.codeql_default_setup.status = $status')
-            fi
-            
-            echo "Applying security settings: $SECURITY_PAYLOAD"
-            gh api repos/$CURRENT_REPO -X PATCH -f security_and_analysis="$SECURITY_PAYLOAD" || echo "Failed to apply security settings"
-          fi
-          
-          # 4. Copy rulesets
-          echo "4. Copying rulesets..."
-          RULESETS=$(gh api repos/$TEMPLATE_REPO/rulesets --jq '.[]')
-          if [ -n "$RULESETS" ]; then
-            echo "$RULESETS" | jq -c '.' | while read -r ruleset; do
-              echo "Creating ruleset: $(echo $ruleset | jq -r '.name')"
-              gh api repos/$CURRENT_REPO/rulesets -X POST --input - <<< "$ruleset" || echo "Failed to create ruleset"
-            done
-          fi
-          
-          # 5. Copy labels
-          echo "5. Copying labels..."
-          LABELS=$(gh api repos/$TEMPLATE_REPO/labels --jq '.[]')
-          if [ -n "$LABELS" ]; then
-            echo "$LABELS" | jq -c '.' | while read -r label; do
-              NAME=$(echo $label | jq -r '.name')
-              echo "Creating label: $NAME"
-              gh api repos/$CURRENT_REPO/labels -X POST --input - <<< "$label" || echo "Failed to create label $NAME"
-            done
-          fi
-          
-          # 6. Copy autolinks
-          echo "6. Copying autolinks..."
-          AUTOLINKS=$(gh api repos/$TEMPLATE_REPO/autolinks --jq '.[]')
-          if [ -n "$AUTOLINKS" ]; then
-            echo "$AUTOLINKS" | jq -c '.' | while read -r autolink; do
-              echo "Creating autolink"
-              gh api repos/$CURRENT_REPO/autolinks -X POST --input - <<< "$autolink" || echo "Failed to create autolink"
-            done
-          fi
-          
-          # 7. Copy deployment environments
-          echo "7. Copying deployment environments..."
-          ENVIRONMENTS=$(gh api repos/$TEMPLATE_REPO/environments --jq '.[].name')
-          if [ -n "$ENVIRONMENTS" ]; then
-            for env in $ENVIRONMENTS; do
-              echo "Creating environment: $env"
-              gh api repos/$CURRENT_REPO/environments/$env -X PUT || echo "Failed to create environment $env"
-            done
+            gh repo edit $CURRENT_REPO --add-topic "$TOPICS" || echo "Failed to set topics"
           fi
           
           echo "Repository settings copied successfully"
@@ -309,16 +207,9 @@ jobs:
             body += '- [ ] Add API documentation link\n\n';
             
             body += '## What Was Automatically Configured\n\n';
-            body += 'The following settings were automatically copied from the template:\n\n';
-            body += '- Repository topics (keywords)\n';
-            body += '- Basic repository settings (wiki, projects, issues, etc.)\n';
-            body += '- Merge options (rebase, squash, merge commit)\n';
-            body += '- Security settings (advanced security, secret scanning, etc.)\n';
-            body += '- Dependabot configuration\n';
-            body += '- Repository rulesets\n';
-            body += '- Labels\n';
-            body += '- Autolinks\n';
-            body += '- Deployment environments\n\n';
+            body += 'The following was automatically copied from the template:\n\n';
+            body += '- Repository topics (keywords)\n\n';
+            body += 'Note: Due to GitHub API limitations, most repository settings must be configured manually via the GitHub UI. The automated process only copies what is reliably possible via the API.\n\n';
             
             body += '## Resources\n\n';
             body += '- [Cloudflare Workers Docs](https://developers.cloudflare.com/workers/)\n';
