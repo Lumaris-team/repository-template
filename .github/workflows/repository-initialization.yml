@@ -74,17 +74,19 @@ jobs:
           TOPICS=$(gh repo view $TEMPLATE_REPO --json repositoryTopics --jq '.repositoryTopics.nodes[].topic.name' | tr '\n' ',' | sed 's/,$//')
           if [ -n "$TOPICS" ]; then
             echo "Setting topics: $TOPICS"
-            gh api repos/$CURRENT_REPO/topics -X PUT -f "names[]=$TOPICS" || echo "Failed to set topics"
+            # Convert comma-separated to array format for API
+            echo "$TOPICS" | jq -R 'split(",")' > topics.json
+            gh api repos/$CURRENT_REPO/topics -X PUT --input topics.json || echo "Failed to set topics"
+            rm topics.json
           fi
           
           # 2. Copy basic repository settings
           echo "2. Copying basic repository settings..."
-          TEMPLATE_SETTINGS=$(gh repo view $TEMPLATE_REPO --json licenseKey,hasWikiEnabled,hasProjectsEnabled,deleteBranchOnMerge,mergeCommitAllowed,rebaseMergeAllowed,squashMergeAllowed,hasIssuesEnabled,hasWikiEnabled,visibility,securityAndAnalysis)
+          TEMPLATE_SETTINGS=$(gh repo view $TEMPLATE_REPO --json hasWikiEnabled,hasProjectsEnabled,deleteBranchOnMerge,mergeCommitAllowed,rebaseMergeAllowed,squashMergeAllowed,hasIssuesEnabled,visibility)
           
           if [ -n "$TEMPLATE_SETTINGS" ]; then
             echo "Applying repository settings..."
-            gh api repos/$CURRENT_REPO -X PATCH -f license_key="$(echo $TEMPLATE_SETTINGS | jq -r '.licenseKey // empty')" \
-              -f has_wiki="$(echo $TEMPLATE_SETTINGS | jq -r '.hasWikiEnabled // false')" \
+            gh api repos/$CURRENT_REPO -X PATCH -f has_wiki="$(echo $TEMPLATE_SETTINGS | jq -r '.hasWikiEnabled // false')" \
               -f has_projects="$(echo $TEMPLATE_SETTINGS | jq -r '.hasProjectsEnabled // false')" \
               -f delete_branch_on_merge="$(echo $TEMPLATE_SETTINGS | jq -r '.deleteBranchOnMerge // false')" \
               -f has_issues="$(echo $TEMPLATE_SETTINGS | jq -r '.hasIssuesEnabled // true')" \
