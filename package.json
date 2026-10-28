@@ -13,7 +13,7 @@
     "test": "echo \"Tests not configured yet\" && exit 0"
   },
   "devDependencies": {
-    "wrangler": "^4.151.1"
+    "wrangler": "^4.152.0"
   },
   "dependencies": {}
 }
